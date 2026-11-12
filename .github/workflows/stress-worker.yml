@@ -1,0 +1,54 @@
+name: MinoCode k6 stress worker
+
+on:
+  schedule:
+    # Every 6 hours (UTC). Each run polls for ~5h45m, then the next run takes over.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      max_runtime_minutes:
+        description: "How long this run keeps polling (minutes, max 345)"
+        required: false
+        default: "345"
+
+concurrency:
+  group: minocode-stress-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest   # public repo => 4 vCPU / 16 GB standard runner
+    timeout-minutes: 358
+    env:
+      HUB_URL: ${{ vars.HUB_URL || 'https://minocode.online/wp-json/awc/v1' }}
+      WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+      K6_BIN: k6
+      POLL_INTERVAL: ${{ vars.POLL_INTERVAL || '5' }}
+      MAX_RUNTIME_MINUTES: ${{ inputs.max_runtime_minutes || '345' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Show runner info
+        run: |
+          echo "vCPU: $(nproc)"; free -h; k6 version; jq --version
+          echo "Public IP of this run: $(curl -fsS https://api.ipify.org || echo unknown)"
+
+      - name: Run poller
+        run: |
+          if [ -z "${WORKER_SECRET}" ]; then
+            echo "::warning::WORKER_SECRET is not set (Settings > Secrets and variables > Actions). Worker idle, exiting."
+            exit 0
+          fi
+          export MAX_RUNTIME_SECONDS=$(( MAX_RUNTIME_MINUTES * 60 ))
+          chmod +x worker/poller.sh
+          ./worker/poller.sh
+
+      - name: Clean up job files
+        if: always()
+        run: rm -rf /tmp/awc-stress-worker
